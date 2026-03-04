@@ -30,20 +30,19 @@ class TelemetryProcessor:
                     events.append(event)
         
         self.events = events
-        print(f"Loaded {len(events)} events from {telemetry_file}")
         return events
     
     def load_employees(self, employees_file: str) -> pd.DataFrame:
         """Load employee metadata from CSV."""
         self.employees = pd.read_csv(employees_file)
-        print(f"Loaded {len(self.employees)} employees from {employees_file}")
         return self.employees
     
     def normalize_events(self) -> pd.DataFrame:
-        """Convert raw events to normalized DataFrame."""
+        """Convert raw events to normalized DataFrame - optimized for large datasets."""
         normalized = []
         
-        for event in self.events:
+        for i, event in enumerate(self.events):
+            
             body = event.get('body', '')
             attrs = event.get('attributes', {})
             
@@ -101,26 +100,33 @@ class TelemetryProcessor:
         if 'timestamp' in df.columns:
             df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
         
-        print(f"Normalized {len(df)} events to DataFrame")
         return df
     
     def aggregate_by_user(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Aggregate metrics by user."""
+        """Aggregate metrics by user - optimized version."""
         api_requests = df[df['event_type'] == 'claude_code.api_request']
         
+        # Create email->employee metadata dict for fast lookup
+        emp_dict = {}
         if self.employees is not None:
-            merged = df.merge(self.employees, left_on='user_email', right_on='email', how='left')
-        else:
-            merged = df
+            emp_dict = self.employees.set_index('email').to_dict('index')
         
         agg_data = []
-        for user_id in df['user_id'].unique():
-            user_events = merged[merged['user_id'] == user_id]
+        user_ids = df['user_id'].unique()
+        
+        for i, user_id in enumerate(user_ids):
+                
+            user_events = df[df['user_id'] == user_id]
             user_api = api_requests[api_requests['user_id'] == user_id]
+            
+            email = user_events['user_email'].iloc[0] if len(user_events) > 0 else None
+            
+            # Get employee metadata from dict instead of merge
+            emp_meta = emp_dict.get(email, {}) if email else {}
             
             row = {
                 'user_id': user_id,
-                'user_email': user_events['user_email'].iloc[0] if len(user_events) > 0 else None,
+                'user_email': email,
                 'num_sessions': user_events['session_id'].nunique(),
                 'total_events': len(user_events),
                 'total_cost_usd': user_api['cost_usd'].sum(),
@@ -129,14 +135,13 @@ class TelemetryProcessor:
                 'total_input_tokens': user_api['input_tokens'].sum(),
                 'total_output_tokens': user_api['output_tokens'].sum(),
                 'preferred_model': user_api['model'].mode()[0] if len(user_api) > 0 else None,
-                'practice': user_events['practice'].iloc[0] if 'practice' in user_events.columns else None,
-                'level': user_events['level'].iloc[0] if 'level' in user_events.columns else None,
-                'location': user_events['location'].iloc[0] if 'location' in user_events.columns else None,
+                'practice': emp_meta.get('practice'),
+                'level': emp_meta.get('level'),
+                'location': emp_meta.get('location'),
             }
             agg_data.append(row)
         
         df_agg = pd.DataFrame(agg_data)
-        print(f"Aggregated data for {len(df_agg)} users")
         return df_agg
     
     def save_processed_data(self, df: pd.DataFrame, filename: str = "processed_events.csv"):
@@ -144,17 +149,44 @@ class TelemetryProcessor:
         output_path = self.output_dir / filename
         output_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(output_path, index=False)
-        print(f"Saved processed data to {output_path}")
         return output_path
 
 
-def process_telemetry(telemetry_file: str, employees_file: str, output_dir: str = "data/processed") -> Tuple[pd.DataFrame, pd.DataFrame]:
+def process_telemetry(
+    telemetry_file: str,
+    employees_file: str,
+    output_dir: str = "data/processed",
+    force_reprocess: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Main processing pipeline.
+    
+    Optimized: if processed CSV files exist, load them directly instead of reprocessing.
     
     Returns:
         Tuple of (events_df, users_agg_df)
     """
+    output_path = Path(output_dir)
+    events_csv = output_path / "normalized_events.csv"
+    users_csv = output_path / "users_aggregated.csv"
+    telemetry_path = Path(telemetry_file)
+    employees_path = Path(employees_file)
+    
+    # Fast path: if cache exists and is up‑to‑date vs raw inputs, use it
+    if not force_reprocess and events_csv.exists() and users_csv.exists():
+        try:
+            # If processed CSVs are newer than *both* source files, trust the cache
+            cache_mtime = min(events_csv.stat().st_mtime, users_csv.stat().st_mtime)
+            src_mtime = max(telemetry_path.stat().st_mtime, employees_path.stat().st_mtime)
+            if cache_mtime >= src_mtime:
+                events_df = pd.read_csv(events_csv)
+                users_df = pd.read_csv(users_csv)
+                return events_df, users_df
+        except Exception:
+            # Any failure falls back to full reprocessing
+            pass
+    
+    # Slow path: process from raw JSONL
     processor = TelemetryProcessor(output_dir)
     
     # Load raw data

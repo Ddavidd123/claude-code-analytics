@@ -170,6 +170,32 @@ Interactive Streamlit application for data exploration:
 streamlit run src/dashboard.py
 ```
 
+## 🧠 How It Works (End‑to‑End Flow)
+
+1. **Synthetic data generation**  
+   - `generate_fake_data.py` stvara realistične Claude Code događaje (API pozivi, tool odluke/rezultati, user promptovi, greške) i `employees.csv` sa metapodacima o korisnicima (level, practice, location).  
+   - Svi identifikatori i sadržaji su potpuno sintetički.
+
+2. **ETL obrada i skladištenje**  
+   - `process_telemetry` u `data_processor.py` čita ceo `output/telemetry_logs.jsonl`, pretvara u tabelarni format (`normalized_events.csv`) i agregira metrike po korisniku (`users_aggregated.csv`).  
+   - CSV fajlovi u `data/processed/` služe kao analytics‑ready skladište (možeš ih direktno učitati u pandas, Excel, ili BI alat).
+
+3. **Analytics engine**  
+   - `TelemetryAnalytics` iz `analytics.py` računa:  
+     - ukupnu upotrebu (broj korisnika, sesija, API poziva, tokena, trošak)  
+     - raspodelu po modelima i alatima (cost, calls, duration, success/accept rate)  
+     - segmente korisnika po nivou, praksi i lokaciji  
+     - performanse (avg/median/p95 trajanje, cache hit ratio, tool success rate)  
+     - greške (error rate, najčešće poruke) i top korisnike.
+
+4. **Dashboard i API sloj**  
+   - `dashboard.py` učitava podatke preko `process_telemetry(..., force_reprocess=True)` – pri svakom učitavanju ili klikom na **Refresh Data** pokreće se ceo ETL nad trenutnim stanjem `telemetry_logs.jsonl`.  
+   - `api.py` izlaže iste podatke i insighte preko FastAPI endpointa (`/events`, `/users`, `/insights`, `/refresh`) za programatski pristup.
+
+5. **Real‑time simulacija**  
+   - `realtime.simulate_stream` kontinuirano dopisuje nove događaje u `output/telemetry_logs.jsonl`, imitirajući live telemetry stream.  
+   - Kada je ovaj proces aktivan, dashboard i API pri svakom osvežavanju ponovo procesuiraju ceo log i tako “vide” nove događaje.
+
 ## 📊 Data Model
 
 ### Telemetry Events
@@ -239,9 +265,66 @@ Dashboard → Users → View metrics grouped by level/practice
    streamlit run src/dashboard.py
    ```
 
-4. **Export Insights** (optional)
+5. **Real‑time Simulation** (optional)
+   - Start the live stream generator in a separate shell:
+     ```bash
+     python -c "from src.realtime import simulate_stream; simulate_stream(Path('output/telemetry_logs.jsonl'))"
+     ```
+   - Sa pokrenutim generatorom:
+     - **Dashboard**: klik na "Refresh Data" briše Streamlit cache i ponovo pokreće `process_telemetry(..., force_reprocess=True)`, pa se novi događaji uključuju u metrike.  
+     - **API**: poziv na `POST /refresh` ponovo pokreće ETL i ažurira precompute‑ovane insighte u memoriji.
+
+6. **Run API Service** (optional)
+   - Launch the FastAPI process:
+     ```bash
+     uvicorn src.api:app --reload
+     ```
+   - Browse documentation at `http://localhost:8000/docs`.
+
+7. **Export Insights** (optional)
    - CSV files available in `data/processed/`
    - Can be imported to other BI tools
+
+## 🤖 LLM Usage Log
+
+### Tools Used
+
+- **Claude / Claude Code (unutar Cursor‑a)** za generisanje koda, refaktorisanje i dokumentaciju.
+- (Opcionalno) **ChatGPT / GitHub Copilot** za manje fragmente koda i podsetnik na bibliotečke API‑je.
+
+### Kako su LLM‑ovi korišćeni
+
+- **Arhitektura i dizajn**  
+  - Korišćen LLM da predloži arhitekturu end‑to‑end platforme (data generation → ETL → analytics → dashboard → API) i razdvajanje odgovornosti po modulima.
+
+- **Generisanje koda**  
+  - Početne verzije sledećih modula su generisane ili skeletonizovane pomoću LLM‑ova i zatim ručno dorađene:  
+    - `generate_fake_data.py` – generator sintetičkih događaja sa realističnim distribucijama modela, alata i grešaka.  
+    - `data_processor.py` – ETL pipeline (učitavanje JSONL, normalizacija, agregacija, zapis u CSV).  
+    - `analytics.py` – izračunavanje svih metrika (usage, cost, performance, errors, segmenti korisnika).  
+    - `dashboard.py` – Streamlit višestranični dashboard sa Plotly grafovima.  
+    - `api.py` i `realtime.py` – FastAPI servis i demonstracija ingestije u realnom vremenu.
+
+- **Dokumentacija i UX copy**  
+  - Struktura ovog `README.md`, opisi komponenti i uputstva za pokretanje su inicijalno generisani LLM‑om, a zatim prilagođeni stvarnom projektu.
+
+### Primeri promptova
+
+- *"Design an ETL pipeline in Python that reads Claude Code telemetry from a JSONL log, normalizes events into a flat table, aggregates metrics per user, and writes analytics-ready CSVs. Use pandas and keep it efficient for large files."*  
+- *"Create a Streamlit dashboard for this telemetry dataset with pages for Overview, Models, Tools, Users, Top Users, Performance, and Errors. Use Plotly for charts and show key metrics as cards."*  
+- *"Write a minimal FastAPI service that exposes endpoints to fetch normalized events, aggregated users, and a precomputed insights dictionary."*
+
+### Validacija AI‑generisanog koda
+
+- **Statička validacija**  
+  - Ručni review koda koji je LLM predložio (čitajljivost, tipovi, performanse) i pojednostavljivanje gde je bio previše kompleksan.
+
+- **Runtime validacija**  
+  - Pokretanje kompletnog flow‑a na lokalnoj mašini: generisanje podataka → procesiranje → dashboard → API i poređenje očekivanih i stvarnih metrika (npr. broj korisnika, sesija, tokena).  
+  - Popravke bug‑ova u parsiranju, grupisanju i edge case‑ovima na osnovu stvarnih rezultata.
+
+- **Iterativno poboljšanje**  
+  - Korišćenje LLM‑a za objašnjenje i prilagođavanje pandas groupby/agg logike tako da analitika odgovori na pitanja iz zadatka (token usage po roli, peak times, ponašanje alata).
 
 ## 📝 Notes
 

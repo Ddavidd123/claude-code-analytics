@@ -38,19 +38,34 @@ def setup_page():
     """, unsafe_allow_html=True)
 
 
+@st.cache_data(show_spinner="⏳ Loading telemetry data... (first run ~1-2 min, cached after)")
 def load_data():
-    """Load and cache processed data."""
+    """Load and cache processed data with Streamlit memoization."""
     telemetry_file = "output/telemetry_logs.jsonl"
     employees_file = "output/employees.csv"
     
     # Check if files exist
-    if not Path(telemetry_file).exists() or not Path(employees_file).exists():
-        st.error("❌ Telemetry data files not found!")
-        st.info("Run: `python src/generate_fake_data.py` first")
+    if not Path(telemetry_file).exists():
+        st.error(f"❌ Telemetry file not found: {telemetry_file}")
+        return None, None
+    if not Path(employees_file).exists():
+        st.error(f"❌ Employees file not found: {employees_file}")
         return None, None
     
-    events_df, users_df = process_telemetry(telemetry_file, employees_file)
-    return events_df, users_df
+    try:
+        # Always reprocess when load_data is called so that real‑time
+        # appends to the telemetry log are reflected after Refresh.
+        events_df, users_df = process_telemetry(
+            telemetry_file,
+            employees_file,
+            force_reprocess=True,
+        )
+        return events_df, users_df
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        import traceback
+        st.write(traceback.format_exc())
+        return None, None
 
 
 def display_overview(analytics: TelemetryAnalytics):
@@ -304,7 +319,7 @@ def main():
     st.title("📊 Claude Code Analytics Dashboard")
     st.markdown("---")
     
-    # Sidebar navigation
+    # Sidebar - always visible
     page = st.sidebar.radio(
         "📍 Navigation",
         ["Overview", "Models", "Tools", "Users", "Top Users", "Performance", "Errors"]
@@ -312,13 +327,22 @@ def main():
     
     st.sidebar.markdown("---")
     st.sidebar.info("💡 This dashboard provides insights into Claude Code telemetry data.")
+    st.sidebar.markdown("---")
+    
+    # Refresh button - ALWAYS visible, even during loading
+    if st.sidebar.button("🔄 Refresh Data"):
+        st.cache_data.clear()
+        st.rerun()
+    
+    st.sidebar.markdown("---")
+    st.sidebar.write("💡 For real-time demos, generate events using `realtime.simulate_stream` and hit Refresh above.")
     
     # Load data
     events_df, users_df = load_data()
     
     if events_df is None or users_df is None:
         return
-    
+
     analytics = TelemetryAnalytics(events_df, users_df)
     
     # Display selected page
